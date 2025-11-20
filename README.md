@@ -1,85 +1,246 @@
-# Restaurant Review Classification with NLTK
+import nltk
+import re
+from unidecode import unidecode
+from nltk.corpus import stopwords
+from nltk.stem.snowball import FrenchStemmer
 
-## Overview
-This repository contains a Jupyter Notebook that demonstrates how to classify restaurant reviews as either **positive** (liked) or **negative** (not liked) using the Natural Language Toolkit (NLTK). The notebook walks through data preprocessing, text cleaning, and applying machine learning techniques for sentiment analysis.
+# ============================================================
+# 1. SENTIMENT LEXICONS
+# ============================================================
 
----
+POSITIVE_STRONG = [
+    "excellent", "super", "parfait", "genial", "magnifique",
+    "extra", "fantastique", "incroyable"
+]
 
-## Features
-- **Data Loading**:
-  - Loads a dataset of restaurant reviews from a TSV file.
-- **Data Preprocessing**:
-  - Removes unnecessary characters and punctuation.
-  - Tokenizes and stems words using NLTK.
-  - Converts text into a structured format for machine learning.
-- **Exploratory Data Analysis (EDA)**:
-  - Visualizes patterns and statistics in the review data.
-- **Model Training and Evaluation**:
-  - Trains a classification model to predict review sentiment.
-  - Evaluates model performance using accuracy and other metrics.
-- **Prediction**:
-  - Predicts the sentiment of new restaurant reviews.
+POSITIVE_WEAK = [
+    "bien", "rapide", "aimable", "correct", "satisfait",
+    "sympa", "agreable", "bon", "efficace"
+]
 
----
+NEGATIVE_STRONG = [
+    "horrible", "inadmissible", "impossible", "insupportable",
+    "degoutant", "catastrophique", "affreux"
+]
 
-## Getting Started
+NEGATIVE_WEAK = [
+    "lent", "retard", "cher", "bug", "probleme",
+    "crash", "mauvais", "dommage", "mediocre"
+]
 
-### Prerequisites
-To run this notebook, you need:
-- Python 3.8+
-- Jupyter Notebook
-- Required Python libraries (see below).
+NEGATIONS = {"pas", "jamais", "aucun", "sans", "ni"}
+INTENSIFIERS = {"tres": 1.5, "vraiment": 1.4, "trop": 1.6, "hyper": 1.7}
 
-### Installation
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/yourusername/restaurant-review-classification.git
-   cd restaurant-review-classification
-   ```
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### Dataset
-The dataset `Restaurant_Reviews.tsv` contains two columns:
-- `Review`: Text of the review.
-- `Liked`: Binary label (1 for positive review, 0 for negative review).
-
-Place the dataset in the same directory as the notebook or update the file path in the code.
-
----
-
-## Usage
-1. Open the Jupyter Notebook:
-   ```bash
-   jupyter notebook Restaurent_Review_Classification_with_NLTK.ipynb
-   ```
-2. Run the cells sequentially to:
-   - Load and clean the data.
-   - Process the reviews using NLTK.
-   - Train a machine learning model.
-   - Test the model on new reviews.
-
----
-
-## Libraries Used
-- **Pandas**: For data manipulation.
-- **NumPy**: For numerical operations.
-- **Matplotlib**: For data visualization.
-- **NLTK**: For natural language processing tasks.
-- **Scikit-learn**: For machine learning models.
-
-Install these libraries using:
-```bash
-pip install pandas numpy matplotlib nltk scikit-learn
-```
-
----
-
-## Results
-- Achieved good classification performance with high accuracy.
-- Demonstrates practical text processing for sentiment analysis.
+stopwords_fr = set(stopwords.words("french"))
+stemmer = FrenchStemmer()
 
 
+# ============================================================
+# 2. ASSURANCE PROBLEM CATEGORIES (TA VERSION OPTIMISÉE)
+# ============================================================
 
+CATEGORIES = {
+    # 1. DELAIS / RETARDS
+    "delai_traitement": [
+        "retard", "delai", "attente", "long", "lent",
+        "tard", "bloque", "pas de nouvelle", "dossier bloque",
+        "prise en charge lente", "trop long"
+    ],
+
+    # 2. INDEMNISATION / REMBOURSEMENT / MONTANT
+    "indemnisation": [
+        "indemnisation", "remboursement", "montant", 
+        "dedommagement", "compensation", "trop bas",
+        "pas rembourse", "franchise", "indemnite",
+        "refus indemnis", "non pris en charge"
+    ],
+
+    # 3. REFUS DE PRISE EN CHARGE
+    "refus_prise_en_charge": [
+        "refus", "pas pris en charge", "non conforme", 
+        "dossier refuse", "preuve insuffisante", "rejet",
+        "preuve non acceptee", "non couvert", "garantie"
+    ],
+
+    # 4. TELEPHONE REMPLACE
+    "remplacement_telephone": [
+        "telephone change", "modele change", "different",
+        "pas le meme", "downgrade", "inferieur", "reconditionne",
+        "pas conforme", "valeur inferieure", "remplace"
+    ],
+
+    # 5. PERTE DE DONNEES
+    "donnees_stockage": [
+        "donnees", "stockage", "memoire", "photos perdues",
+        "fichiers perdus", "efface", "data", "sauvegarde",
+        "perte donnees"
+    ],
+
+    # 6. PROBLEMES TECHNIQUES
+    "problemes_techniques": [
+        "bug", "batterie", "chauffe", "tactile", "camera",
+        "wifi", "micro", "haut parleur", "face id",
+        "fingerprint", "ne marche pas", "ne fonctionne pas",
+        "redemarre", "defaut", "probleme technique"
+    ],
+
+    # 7. QUALITE PIECES / REPARATION
+    "qualite_piece": [
+        "piece", "defectueuse", "qualite", "non originale",
+        "bas de gamme", "ecran", "batterie", "pas conforme",
+        "reparation mauvaise", "reparation mal faite"
+    ],
+
+    # 8. SERVICE CLIENT
+    "service_client": [
+        "communication", "pas informe", "pas de reponse",
+        "impoli", "mauvais", "aucune info", "mensonge",
+        "mauvaise experience", "promesse non tenue",
+        "contact difficile"
+    ],
+
+    # 9. ADMINISTRATIF
+    "administratif": [
+        "facture", "imei", "garantie", "document",
+        "papiers", "erreur", "contrat", "dossier incomplet",
+        "information manquante"
+    ]
+}
+
+
+# ============================================================
+# 3. CLEANING
+# ============================================================
+
+def clean_text(text):
+    if not isinstance(text, str):
+        return ""
+    text = unidecode(text.lower())
+    text = re.sub(r"[^\w\s]", " ", text)   # punctuation
+    text = re.sub(r"\d+", " ", text)       # digits
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# ============================================================
+# 4. TOKENIZE + STEM
+# ============================================================
+
+def preprocess(text):
+    cleaned = clean_text(text)
+    tokens = [
+        t for t in nltk.word_tokenize(cleaned)
+        if len(t) > 2 and t not in stopwords_fr
+    ]
+    stems = [stemmer.stem(t) for t in tokens]
+    return tokens, stems
+
+
+# ============================================================
+# 5. SENTIMENT SCORING
+# ============================================================
+
+def score_sentiment(tokens):
+    score = 0
+    prev = ""
+
+    for w in tokens:
+
+        multiplier = INTENSIFIERS.get(prev, 1.0)
+
+        if w in POSITIVE_STRONG:
+            score += 2 * multiplier
+        elif w in POSITIVE_WEAK:
+            score += 1 * multiplier
+        elif w in NEGATIVE_STRONG:
+            score -= 2 * multiplier
+        elif w in NEGATIVE_WEAK:
+            score -= 1 * multiplier
+
+        if prev in NEGATIONS:
+            score *= -1
+
+        prev = w
+
+    return score
+
+
+def classify_sentiment(score):
+    if score >= 1:
+        return "promoteur"
+    elif score <= -1:
+        return "detracteur"
+    return "neutre"
+
+
+# ============================================================
+# 6. DETECT PROBLEMS
+# ============================================================
+
+def detect_problems(tokens):
+    text = " ".join(tokens)
+    found = []
+
+    for category, keywords in CATEGORIES.items():
+        for kw in keywords:
+            if kw in tokens or kw in text:
+                found.append(category)
+                break
+
+    return found if found else ["aucun"]
+
+
+# ============================================================
+# 7. ANALYZE ONE COMMENT
+# ============================================================
+
+def analyze_comment(text):
+    tokens, stems = preprocess(text)
+    score = score_sentiment(tokens)
+    sentiment = classify_sentiment(score)
+    problems = detect_problems(tokens)
+
+    return {
+        "clean": " ".join(tokens),
+        "tokens": tokens,
+        "sentiment_score": score,
+        "sentiment": sentiment,
+        "problems": problems
+    }
+
+
+# ============================================================
+# 8. APPLY ON DATAFRAME → RETURNS result_comment
+# ============================================================
+
+def apply_pipeline(df, col="comment"):
+    df["analysis"] = df[col].apply(analyze_comment)
+
+    df["clean"] = df["analysis"].apply(lambda x: x["clean"])
+    df["tokens"] = df["analysis"].apply(lambda x: x["tokens"])
+    df["sentiment_score"] = df["analysis"].apply(lambda x: x["sentiment_score"])
+    df["sentiment"] = df["analysis"].apply(lambda x: x["sentiment"])
+    df["problems"] = df["analysis"].apply(lambda x: x["problems"])
+
+    result_comment = df.drop(columns=["analysis"]).copy()
+    result_comment = result_comment.rename(columns={col: "comment_original"})
+
+    return result_comment
+
+
+
+
+how to use 
+
+
+df = pd.DataFrame({
+    "comment": [
+        "Délai trop long, aucune information du service client.",
+        "J'ai perdu mes données et reçu un téléphone inférieur.",
+        "Très bon service, rapide et efficace."
+    ]
+})
+
+
+run pipeline 
+result_comment = apply_pipeline(df, "comment")
+print(result_comment)
